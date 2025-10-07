@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
+import os
+
 import barndoor.sdk as bd
 from barndoor.sdk.config import get_config
 from crewai import Agent, Task, Crew
@@ -11,75 +13,65 @@ from crewai_tools import MCPServerAdapter
 
 SERVER_SLUG = "notion"
 
+
 async def main() -> None:
-    try:
-        # Load .env
-        load_dotenv(Path(__file__).parent / ".env")
+    # 1️⃣ Load environment
+    load_dotenv(Path(__file__).parent / ".env")
 
-        # Authenticate with Barndoor
-        sdk = await bd.login_interactive()
-        config = get_config()
+    # 2️⃣ Authenticate with Barndoor (public SDK handles PKCE flow + token caching)
+    sdk = await bd.login_interactive()
 
-        print(f"API Base URL: {config.api_base_url}")
-        print(f"MCP Base URL: {config.mcp_base_url}")
+    config = get_config()
 
-        # List available servers
-        servers = await sdk.list_servers()
-        print("\nAvailable MCP servers:")
-        for s in servers:
-            print(f"  • {s.slug:<12} status={s.connection_status}")
+    print(f"API Base URL: {config.api_base_url}")
+    print(f"MCP Base URL: {config.mcp_base_url}")
+    print(f"Authenticated as: {sdk.token}")
 
-        # Ensure connection
-        await bd.ensure_server_connected(sdk, SERVER_SLUG)
+    # 3️⃣ List available MCP servers
+    servers = await sdk.list_servers()
+    print("\nAvailable MCP servers:")
+    for s in servers:
+        print(f"  • {s.slug:<12} status={s.connection_status}")
 
-        # Fetch connection params
-        params, public_url = await bd.make_mcp_connection_params(sdk, SERVER_SLUG)
+    # 4️⃣ Ensure the selected server is connected
+    await bd.ensure_server_connected(sdk, SERVER_SLUG)
 
-        # Explicitly override the URL using known BARNDOOR_URL
-        override_base_url = os.getenv("BARNDOOR_URL")
-        if not override_base_url:
-            raise ValueError("❌ BARNDOOR_URL not found in .env")
+    # 5️⃣ Build MCP connection parameters
+    params, public_url = await bd.make_mcp_connection_params(sdk, SERVER_SLUG)
+    print(f"\n✓ Connected MCP URL: {params['url']}")
 
-        # Reconstruct URL with correct hostname and token
-        token = params["url"].split("?token=")[-1]
-        fixed_url = f"{override_base_url}/mcp/{SERVER_SLUG}?token={token}"
-
-        params["url"] = fixed_url
-        public_url = fixed_url
-
-        print(f"✓ Ready – MCP URL: {params['url']}")
-
-        # Run the CrewAI task
-        with MCPServerAdapter(params) as mcp_tools:
-            researcher = Agent(
-                role="Notion Workspace Assistant",
-                goal="Help users query and update their Notion pages & databases",
-                backstory="Sample agent using Barndoor MCP integration with Notion.",
-                tools=mcp_tools,
-                verbose=True
-            )
-
-            task = Task(
-                description="List ten notion pages and summarize their content.",
-                expected_output="A list of notion pages and short description",
-                agent=researcher
-            )
-
-            crew = Crew(
-            agents=[researcher],
-            tasks=[task],
-            verbose=True  # ✅ VALID
+    # 6️⃣ Use MCP adapter with CrewAI
+    with MCPServerAdapter(params) as mcp_tools:
+        agent = Agent(
+            role="Notion Assistant",
+            goal="Query and summarize Notion workspace pages.",
+            backstory="Uses the Barndoor SDK public MCP connection.",
+            tools=mcp_tools,
+            verbose=True,
         )
 
+        task = Task(
+            description="List 5 Notion pages and summarize each one.",
+            expected_output="A short list of page names and summaries.",
+            agent=agent,
+        )
 
-            print("\n🚀 Running CrewAI with MCP tools…")
-            result = await crew.kickoff_async()
-            print(f"\n✓ Result: {result}")
+        crew = Crew(agents=[agent], tasks=[task], verbose=True)
 
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-    finally:
-        await sdk.aclose()
+        print("\n🚀 Running CrewAI task...\n")
+        result = await crew.kickoff_async()
+        print(f"✅ CrewAI finished:\n\n{result}")
+
+    # 7️⃣ Save a simple Markdown report
+    reports_dir = Path(__file__).parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = reports_dir / f"notion_summary_{ts}.md"
+    report_path.write_text(f"# Notion Summary Report\n\n{result}", encoding="utf-8")
+    print(f"\n📝 Report saved to {report_path.resolve()}")
+
+    await sdk.aclose()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
