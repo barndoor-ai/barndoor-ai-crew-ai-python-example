@@ -1,0 +1,3 @@
+[submodule "CrewAI-Studio"]
+	path = CrewAI-Studio
+	url = https://github.com/strnad/CrewAI-Studio.git
