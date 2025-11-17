@@ -3,75 +3,143 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
+
 from dotenv import load_dotenv
-import os
 
 import barndoor.sdk as bd
 from barndoor.sdk.config import get_config
 from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
 
-SERVER_SLUG = "notion"
+
+async def select_server(sdk: bd.BarndoorSDK) -> tuple[str, str]:
+    servers = await sdk.list_servers()
+
+    # Barndoor uses "connected" and "available" for ready-to-use servers
+    usable = [s for s in servers if s.connection_status in ("connected", "available")]
+
+    if not usable:
+        print("No usable MCP servers found (need 'connected' or 'available').")
+        print("Check https://app.barndoor.ai/servers")
+        raise SystemExit(1)
+
+    print("\nUsable MCP Servers")
+    print("=" * 90)
+    for i, s in enumerate(usable, start=1):
+        status = "Connected" if s.connection_status == "connected" else "Available"
+        name = s.name or s.mcp_server_directory.name or s.slug.replace("-", " ").title()
+        print(f"  {i:<3}) {s.slug:<22} [{status}] → {name}")
+    print("=" * 90)
+
+    while True:
+        try:
+            choice = input(f"\nChoose (1-{len(usable)}): ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(usable):
+                selected = usable[idx]
+                display_name = (
+                    selected.name
+                    or selected.mcp_server_directory.name
+                    or selected.slug.replace("-", " ").title()
+                )
+                print(f"\nSelected: {selected.slug} → {display_name} [{selected.connection_status}]")
+                return selected.slug, display_name
+        except ValueError:
+            print("Please enter a number")
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            raise SystemExit(0)
 
 
 async def main() -> None:
-    # 1️⃣ Load environment
     load_dotenv(Path(__file__).parent / ".env")
 
-    # 2️⃣ Authenticate with Barndoor (public SDK handles PKCE flow + token caching)
+    print("Logging in to Barndoor...")
     sdk = await bd.login_interactive()
 
     config = get_config()
+    print(f"API URL : {config.api_base_url}")
+    print(f"MCP URL : {config.mcp_base_url}\n")
 
-    print(f"API Base URL: {config.api_base_url}")
-    print(f"MCP Base URL: {config.mcp_base_url}")
-    print(f"Authenticated as: {sdk.token}")
+    server_slug, server_name = await select_server(sdk)
 
-    # 3️⃣ List available MCP servers
-    servers = await sdk.list_servers()
-    print("\nAvailable MCP servers:")
-    for s in servers:
-        print(f"  • {s.slug:<12} status={s.connection_status}")
+    await bd.ensure_server_connected(sdk, server_slug)
+    params, public_url = await bd.make_mcp_connection_params(sdk, server_slug)
 
-    # 4️⃣ Ensure the selected server is connected
-    await bd.ensure_server_connected(sdk, SERVER_SLUG)
+    # ──────────────────────────────────────────────────────────────
+    # CRITICAL FIX – Barndoor now returns either "token" OR "authorization"
+    # ──────────────────────────────────────────────────────────────
+    if "token" in params and "authorization" not in params:
+        # Old style → convert
+        params["authorization"] = f"Bearer {params.pop('token')}"
+    elif "authorization" in params and not params["authorization"].startswith("Bearer "):
+        # Sometimes it's just the raw token
+        params["authorization"] = f"Bearer {params['authorization']}"
 
-    # 5️⃣ Build MCP connection parameters
-    params, public_url = await bd.make_mcp_connection_params(sdk, SERVER_SLUG)
-    print(f"\n✓ Connected MCP URL: {params['url']}")
+    # Safe printing
+    auth_header = params.get("authorization", "(missing)")
+    print(f"\nMCP Server URL : {params['url']}")
+    print(f"Transport      : {params.get('transport', 'unknown')}")
+    print(f"Public URL     : {public_url}")
+    print(f"Authorization  : {auth_header}\n")
 
-    # 6️⃣ Use MCP adapter with CrewAI
+    print(f"Connected to: {server_name}")
+    print("\nWhat do you want the agent to do?")
+    user_task = input("\n> ").strip()
+    if not user_task:
+        print("Task cannot be empty!")
+        raise SystemExit(1)
+
+    # ──────────────────────────────────────────────────────────────
+    # Run CrewAI with the MCP tools
+    # ──────────────────────────────────────────────────────────────
     with MCPServerAdapter(params) as mcp_tools:
+        print(f"\nLoaded {len(mcp_tools)} tools from {server_name}\n")
+
         agent = Agent(
-            role="Notion Assistant",
-            goal="Query and summarize Notion workspace pages.",
-            backstory="Uses the Barndoor SDK public MCP connection.",
+            role=f"{server_name} Assistant",
+            goal=f"Help the user with anything in their {server_name} account using real MCP tools.",
+            backstory="You are an expert user of this app with full read/write access via Barndoor MCP.",
             tools=mcp_tools,
             verbose=True,
+            allow_delegation=False,
         )
 
         task = Task(
-            description="List 5 Notion pages and summarize each one.",
-            expected_output="A short list of page names and summaries.",
+            description=user_task,
+            expected_output="Clear, helpful, well-formatted response. Use markdown tables/lists when appropriate.",
             agent=agent,
         )
 
         crew = Crew(agents=[agent], tasks=[task], verbose=True)
-
-        print("\n🚀 Running CrewAI task...\n")
+        print("Running task...\n")
         result = await crew.kickoff_async()
-        print(f"✅ CrewAI finished:\n\n{result}")
 
-    # 7️⃣ Save a simple Markdown report
-    reports_dir = Path(__file__).parent / "reports"
-    reports_dir.mkdir(exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_path = reports_dir / f"notion_summary_{ts}.md"
-    report_path.write_text(f"# Notion Summary Report\n\n{result}", encoding="utf-8")
-    print(f"\n📝 Report saved to {report_path.resolve()}")
+        print("\nTask Complete!\n")
+        print(result)
+
+        # Save report
+        reports_dir = Path("reports")
+        reports_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in server_name)
+        report_path = reports_dir / f"{safe_name}_{timestamp}.md"
+
+        header = f"# {server_name} Report\n\n"
+        header += f"Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n"
+        header += f"Task: {user_task}\n\n---\n\n"
+
+        report_path.write_text(header + str(result), encoding="utf-8")
+        print(f"\nReport saved → {report_path.resolve()}")
 
     await sdk.aclose()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n\nGoodbye!")
+    except Exception as e:
+        print(f"\nError: {e}")
+        raise
