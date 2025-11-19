@@ -1,7 +1,7 @@
 ## Clone Repo
 
 ```bash
-git clone https://github.com/barndoor-ai/crew-ai-python-example.git
+git clone https://github.com/barndoor-ai/barndoor-ai-crew-ai-python-example.git
 ```
 
 ## Prerequisites
