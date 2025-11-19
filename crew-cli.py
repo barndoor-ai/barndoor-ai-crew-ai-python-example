@@ -82,6 +82,7 @@ async def main() -> None:
     print(f"Transport      : {params.get('transport', 'unknown')}")
     print(f"Public URL     : {public_url}")
     print(f"Authorization  : {auth_header}\n")
+    print ("Token: " + sdk.token + "\n")
 
     print(f"Connected to: {server_name}")
     print("\nWhat do you want the agent to do?")
