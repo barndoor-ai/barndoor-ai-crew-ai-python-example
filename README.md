@@ -41,7 +41,6 @@ source .venv/bin/activate
 Packages include the Barndoor SDK, CrewAI SDK, and other tools.
 ```bash
 uv pip install -r requirements.txt 
-uv pip install barndoor-sdk crewai crewai-tools[mcp] python-dotenv streamlit
 ```
 
 ### 4. Create an `.env` configuration file
