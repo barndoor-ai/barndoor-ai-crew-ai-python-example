@@ -72,9 +72,9 @@ that can be run in the browser.
 
 The CLI version: `uv run crew-cli.py`
 
-The browser-based UI version: `uv streamlit run crew-ui.py`
+The browser-based UI version: `uv run streamlit run crew-ui.py`
 
 ## Tips
 
-- To reinitiate the Barndoor login flow, or login to a different account remote the `~/.barndoor/token.json` file.
+- To reinitiate the Barndoor login flow, or login to a different account remove the `~/.barndoor/token.json` file.
 
