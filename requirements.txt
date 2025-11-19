@@ -1,0 +1,5 @@
+barndoor
+crewai
+crewai-tools
+crewai-tools[mcp]
+streamlit

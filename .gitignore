@@ -1,2 +1,5 @@
 .env
 crewai.db
+.venv
+reports/
+uv.lock
