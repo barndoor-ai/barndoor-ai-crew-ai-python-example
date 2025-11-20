@@ -123,7 +123,7 @@ async def main() -> None:
         reports_dir = Path("reports")
         reports_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in server_name)
+        safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in server_name)
         report_path = reports_dir / f"{safe_name}_{timestamp}.md"
 
         header = f"# {server_name} Report\n\n"
