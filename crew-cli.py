@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -96,6 +97,10 @@ async def main() -> None:
         print("Task cannot be empty!")
         raise SystemExit(1)
 
+    # Pick the OpenAI model: env var as default, Enter to accept, or type another name.
+    default_model = os.getenv("OPENAI_MODEL_NAME", "gpt-4.1-mini")
+    model = input(f"\nOpenAI model [{default_model}]: ").strip() or default_model
+
     # ──────────────────────────────────────────────────────────────
     # Run CrewAI with the MCP tools
     # ──────────────────────────────────────────────────────────────gen
@@ -107,6 +112,7 @@ async def main() -> None:
             goal=f"Help the user with anything in their {server_name} account using real MCP tools.",
             backstory="You are an expert user of this app with full read/write access via Barndoor MCP.",
             tools=mcp_tools,
+            llm=model,
             verbose=True,
             allow_delegation=False,
         )

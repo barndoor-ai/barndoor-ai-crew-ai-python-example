@@ -19,6 +19,17 @@ AUTH_MODES = {
     "m2m": "Machine-to-machine (M2M client credentials)",
 }
 
+# Common tool-capable OpenAI chat models; first entry is CrewAI's current default.
+# You can also type any other model name (the selector accepts free input).
+OPENAI_MODELS = [
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4.1-nano",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4-turbo",
+]
+
 
 # ─────────────────────────────────────────────
 # Authentication
@@ -57,7 +68,7 @@ async def make_sdk(auth_mode: str) -> BarndoorSDK:
 # ─────────────────────────────────────────────
 # Core async function (DO NOT use asyncio.run!)
 # ─────────────────────────────────────────────
-async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str):
+async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str, model: str):
     sdk = None
 
     try:
@@ -91,11 +102,13 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
         with MCPServerAdapter(params) as tools:
             log(f"Loaded **{len(tools)} tools**")
 
+            log(f"Model: **{model}**")
             agent = Agent(
                 role=f"{display_name} Expert",
                 goal=f"Complete any task in the user's {display_name} account using real data.",
                 backstory=f"You are a master of {display_name} with full access via Barndoor MCP.",
                 tools=tools,
+                llm=model,
                 verbose=True,
                 allow_delegation=False,
             )
@@ -208,6 +221,14 @@ if not servers or list(servers.values())[0] is None:
 server_choice = st.selectbox("Choose your app:", options=list(servers.keys()))
 selected_slug = servers[server_choice]
 
+model = st.selectbox(
+    "OpenAI model:",
+    options=OPENAI_MODELS,
+    index=0,
+    accept_new_options=True,
+    help="Pick a model or type any other OpenAI model name. Default is CrewAI's gpt-4.1-mini.",
+)
+
 query = st.text_area(
     "What do you want to do?",
     placeholder="Examples:\n• List my recent Salesforce opportunities\n• Summarize Notion pages tagged 'Q4'\n• Show unread Gmail from last 3 days",
@@ -229,7 +250,7 @@ if st.button("Run Agent", type="primary", use_container_width=True):
 
     with st.spinner("Working..."):
         # This is the CORRECT way in Streamlit
-        result, app_name = asyncio.run(run_crewai_task(selected_slug, query, log, auth_mode))
+        result, app_name = asyncio.run(run_crewai_task(selected_slug, query, log, auth_mode, model))
 
     st.markdown("---")
     st.subheader(f"Result from {app_name}")

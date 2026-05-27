@@ -44,6 +44,20 @@ Use **Switch auth** (top-right) to change modes; it re-authenticates on the next
 > servers connected to it in Barndoor, the list will be empty even though your user has connections —
 > use Interactive login in that case. (The CLI, `crew-cli.py`, always uses interactive login.)
 
+## Choosing an OpenAI model
+
+The agent's LLM is selectable at runtime (no code change needed):
+
+- **Streamlit UI** — an **OpenAI model** dropdown next to the app selector. It lists common
+  tool-capable models (`gpt-4.1-mini` default, plus `gpt-4.1`, `gpt-4.1-nano`, `gpt-4o`,
+  `gpt-4o-mini`, `gpt-4-turbo`) and also accepts a typed-in model name.
+- **CLI** — prompts for a model before running, defaulting to `$OPENAI_MODEL_NAME` (or
+  `gpt-4.1-mini` if unset). Press Enter to accept the default or type another name.
+
+If you don't choose one, the default is CrewAI's `gpt-4.1-mini`. Reasoning models (`o1`/`o3`) and
+`gpt-5` aren't in the UI defaults — they use different tool-calling semantics and may not work with
+this agent setup, though you can type them in to experiment.
+
 ## Setup
 
 This is a [uv](https://docs.astral.sh/uv/) project — `pyproject.toml` and `uv.lock` define
