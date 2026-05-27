@@ -22,13 +22,27 @@ git clone https://github.com/barndoor-ai/barndoor-ai-crew-ai-python-example.git
 
 ## What this app does
 
-The first time you run the app, a browser window opens to the Barndoor login screen. Once
-authenticated, it stores OAuth access and refresh tokens in `~/.barndoor/token.json`. You're then
-presented with the list of MCP servers you're **connected** to in your Barndoor instance.
+After authenticating (see [Authentication](#authentication) below), you're presented with the list
+of MCP servers you're **connected** to in your Barndoor instance.
 
 Select a connected server, then describe — in natural language — what you'd like the agent to do.
 That kicks off the Crew execution: you'll see each step as the agent works, through to its final
 output. CLI runs are also saved as Markdown under `reports/`.
+
+## Authentication
+
+The Streamlit UI opens on a landing page where you choose how to authenticate before anything runs:
+
+| Mode | How it works | Identity |
+|---|---|---|
+| **Interactive login** | Opens the Barndoor login in your browser (OAuth). Tokens are cached in `~/.barndoor/token.json`. | Your **user** — sees the servers *you* connected. |
+| **Machine-to-machine (M2M)** | OAuth client-credentials grant from your `.env` creds (`BarndoorSDK.from_client_credentials`). No browser. | The **application** client — sees only servers connected to *that client*. |
+
+Use **Switch auth** (top-right) to change modes; it re-authenticates on the next load.
+
+> **Note:** M2M authenticates as the application identity, not your user. If the M2M client has no
+> servers connected to it in Barndoor, the list will be empty even though your user has connections —
+> use Interactive login in that case. (The CLI, `crew-cli.py`, always uses interactive login.)
 
 ## Setup
 
