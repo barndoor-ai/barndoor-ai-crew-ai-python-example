@@ -10,6 +10,7 @@ from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
 from openai_tool_schema_patch import patch_crewai_tool_schemas
 from barndoor_compat import fetch_all_servers
+from llm_gateway import make_llm, list_gateway_models, DEFAULT_MODEL, DEMO_UNSUPPORTED_MODELS
 
 # MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
 patch_crewai_tool_schemas()
@@ -19,16 +20,17 @@ AUTH_MODES = {
     "m2m": "Machine-to-machine (M2M client credentials)",
 }
 
-# Common tool-capable OpenAI chat models; first entry is CrewAI's current default.
-# You can also type any other model name (the selector accepts free input).
-OPENAI_MODELS = [
-    "gpt-4.1-mini",
-    "gpt-4.1",
-    "gpt-4.1-nano",
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4-turbo",
-]
+
+@st.cache_data(ttl=300)
+def model_options() -> list[str]:
+    """Gateway-served models, plus unsupported ones to demo the gateway rejecting them."""
+    try:
+        models = list_gateway_models()
+    except Exception:
+        models = []
+    models = models or [DEFAULT_MODEL]
+    # Append models the gateway doesn't serve so a user can pick one and see it fail.
+    return models + [m for m in DEMO_UNSUPPORTED_MODELS if m not in models]
 
 
 # ─────────────────────────────────────────────
@@ -102,13 +104,13 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
         with MCPServerAdapter(params) as tools:
             log(f"Loaded **{len(tools)} tools**")
 
-            log(f"Model: **{model}**")
+            log(f"Model: **{model}** (via Barndoor LLM gateway)")
             agent = Agent(
                 role=f"{display_name} Expert",
                 goal=f"Complete any task in the user's {display_name} account using real data.",
                 backstory=f"You are a master of {display_name} with full access via Barndoor MCP.",
                 tools=tools,
-                llm=model,
+                llm=make_llm(model),
                 verbose=True,
                 allow_delegation=False,
             )
@@ -127,7 +129,14 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
         return str(result), display_name
 
     except Exception as e:
-        error_msg = f"Error: {type(e).__name__}: {e}"
+        detail = str(e).lower()
+        if "not found" in detail or "not available" in detail:
+            error_msg = (
+                f"Error: The Barndoor LLM gateway doesn't support model '{model}'. "
+                f"Pick a gateway-served model. (gateway: {type(e).__name__}: {e})"
+            )
+        else:
+            error_msg = f"Error: {type(e).__name__}: {e}"
         log(error_msg)
         return error_msg, "Error"
     finally:
@@ -221,12 +230,13 @@ if not servers or list(servers.values())[0] is None:
 server_choice = st.selectbox("Choose your app:", options=list(servers.keys()))
 selected_slug = servers[server_choice]
 
+_models = model_options()
 model = st.selectbox(
-    "OpenAI model:",
-    options=OPENAI_MODELS,
-    index=0,
+    "Model (via Barndoor LLM gateway):",
+    options=_models,
+    index=_models.index(DEFAULT_MODEL) if DEFAULT_MODEL in _models else 0,
     accept_new_options=True,
-    help="Pick a model or type any other OpenAI model name. Default is CrewAI's gpt-4.1-mini.",
+    help="Models served by the Barndoor LLM gateway. You can also type any other id it accepts.",
 )
 
 query = st.text_area(
