@@ -1,79 +1,94 @@
-## Clone Repo
+# Barndoor + CrewAI Example
+
+Two small demos that connect [Barndoor](https://app.barndoor.ai) MCP servers to a
+[CrewAI](https://crewai.com) agent:
+
+- **`crew-cli.py`** — an interactive terminal app: pick a connected server, type a task, watch the agent run.
+- **`crew-ui.py`** — the same flow as a [Streamlit](https://streamlit.io) web UI.
+
+## Clone
 
 ```bash
 git clone https://github.com/barndoor-ai/barndoor-ai-crew-ai-python-example.git
 ```
 
 ## Prerequisites
-- Python 3.10+
-- A Barndoor account
-- An MCP server registered with Barndoor (connected/authenticated)
-- AI agent registered with Barndoor
+
+- **Python 3.13** (the project pins `>=3.13,<3.14`)
+- [uv](https://docs.astral.sh/uv/)
+- A Barndoor account with at least one connected MCP server
+- An AI agent registered with Barndoor (for `AGENT_CLIENT_ID` / `AGENT_CLIENT_SECRET`)
+- An OpenAI API key (CrewAI's default LLM)
 
 ## What this app does
-The first time you run the app, a browser window will open to the Barndoor login screen. Once authenticated, it will store OAuth access and refresh tokens into a file `~/.barndoor/token.json`. Once logged in, you'll be presented with a list of usable MCP servers registered in your Barndoor instance.
 
-Select one of the MCP servers that you're `[Connected]` to. You'll then be prompted with what 
-you'd like the agent to do. Provide a natural language query of what task you'd like the agent to 
-perform. 
+The first time you run the app, a browser window opens to the Barndoor login screen. Once
+authenticated, it stores OAuth access and refresh tokens in `~/.barndoor/token.json`. You're then
+presented with the list of MCP servers you're **connected** to in your Barndoor instance.
 
-This will initate the Crew execution. You'll see each step of the Crew job being performed, all
-the way through the end where the agent presents it's final output to the task. Additionally, the
-Crew task output is saved in the `./reports/` folder.
+Select a connected server, then describe — in natural language — what you'd like the agent to do.
+That kicks off the Crew execution: you'll see each step as the agent works, through to its final
+output. CLI runs are also saved as Markdown under `reports/`.
 
-## Setting up the app
+## Setup
 
-For the fastest setup and install, we recommend using [uv](https://github.com/astral-sh/uv) instead of pip. We also recommend creating a virtual environment to isolate installed packages from your computer's Python environment.
+This is a [uv](https://docs.astral.sh/uv/) project — `pyproject.toml` and `uv.lock` define
+everything (including `barndoor`, which is pinned to a git commit).
 
-### 1. Install uv (one time)
+If you don't have uv: `brew install uv` (macOS), or see the
+[install docs](https://docs.astral.sh/uv/getting-started/installation/).
 
-- On MacOS using brew: `brew install uv`
-- For other methods and operating systems, see uv [installation methods](https://docs.astral.sh/uv/getting-started/installation/)
-
-
-### 2. Create an isolated virtual environment in the repo
-```bash
-uv venv .venv
-source .venv/bin/activate
-```
-
-### 3. Install required packages
-Packages include the Barndoor SDK, CrewAI SDK, and other tools.
-```bash
-uv pip install -r requirements.txt 
-```
-
-### 4. Create an `.env` configuration file
+Install the exact locked dependencies into `.venv`:
 
 ```bash
-# Replace with your agent's client ID and secret from Barndoor
-# See: https://app.barndoor.ai/agents
-AGENT_CLIENT_ID={{barndoor-agent-client-id}}
-AGENT_CLIENT_SECRET={{barndoor-agent-client-secret}}
-
-# Replace with your tenant hostname
-BARNDOOR_API=https://{{your-tenant}}.mcp.barndoor.ai
-BARNDOOR_URL=https://{{your-tenant}}.mcp.barndoor.ai
-
-# Valid OpenAI API Key
-# see: https://platform.openai.com/api-keys
-OPENAI_API_KEY={{your-openapi-key}}}
-
-# Default values, no changes required
-AUTH_DOMAIN=auth.barndoor.ai
-API_AUDIENCE=https://barndoor.ai/
-MODE=production
+uv sync
 ```
 
-## Running the app
-There are actually two apps. One that runs in the terminal, and another
-that can be run in the browser.
+Then create a `.env` file next to the scripts:
 
-The CLI version: `uv run crew-cli.py`
+```bash
+# Barndoor agent credentials (from https://app.barndoor.ai/agents)
+AGENT_CLIENT_ID=XXX
+AGENT_CLIENT_SECRET=XXX
 
-The browser-based UI version: `uv run streamlit run crew-ui.py`
+# OpenAI key for CrewAI's LLM (https://platform.openai.com/api-keys)
+OPENAI_API_KEY=XXX
+
+# Environment selector. "production" (default) = trial/Keycloak; the SDK bakes in
+# the issuer (https://auth.barndoor.ai/realms/barndoor) and discovers endpoints via OIDC.
+BARNDOOR_ENV=production
+
+# Your tenant API base URL (the {org_slug} is otherwise derived from your login token).
+BARNDOOR_URL=https://<your-org-slug>.platform.barndoor.ai
+```
+
+> The SDK (barndoor ≥ 1.x) auto-configures auth per environment — you do **not** set
+> `AUTH_DOMAIN`/realm URLs by hand. Older SDK pins used Auth0 endpoints and 404 against
+> the current Keycloak IdP, which is why this project pins a post-migration commit.
+
+## Run
+
+Interactive CLI:
+
+```bash
+uv run python crew-cli.py
+```
+
+Streamlit web UI:
+
+```bash
+uv run streamlit run crew-ui.py
+```
 
 ## Tips
 
-- To reinitiate the Barndoor login flow, or login to a different account remove the `~/.barndoor/token.json` file.
+- To restart the Barndoor login flow (or switch accounts), delete `~/.barndoor/token.json`.
 
+## Key dependencies
+
+| Package | Version |
+|---|---|
+| crewai | 1.14.5 |
+| crewai-tools | 1.14.5 |
+| streamlit | 1.57.0 |
+| barndoor | git-pinned |
