@@ -6,6 +6,11 @@ import barndoor.sdk as bd
 import asyncio
 from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
+from openai_tool_schema_patch import patch_crewai_tool_schemas
+from barndoor_compat import fetch_all_servers
+
+# MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
+patch_crewai_tool_schemas()
 
 
 
@@ -29,7 +34,7 @@ async def run_crewai_task(server_slug: str, user_query: str, log):
         sdk = await bd.login_interactive()
         log("Logged in!")
 
-        servers = await sdk.list_servers()
+        servers = await fetch_all_servers(sdk)
         server = next((s for s in servers if s.slug == server_slug), None)
         if not server:
             raise ValueError(f"Server '{server_slug}' not found.")
@@ -97,12 +102,13 @@ def load_servers():
     asyncio.set_event_loop(loop)
     try:
         sdk = loop.run_until_complete(bd.login_interactive())
-        servers = loop.run_until_complete(sdk.list_servers())
+        servers = loop.run_until_complete(fetch_all_servers(sdk))
         loop.run_until_complete(sdk.aclose())
 
         options = {}
         for s in servers:
-            if s.connection_status in ("connected", "available"):
+            # "available"/"pending" are catalog/not-yet-usable apps; only "connected" is ready.
+            if s.connection_status == "connected":
                 name = (
                     s.name
                     or getattr(s.mcp_server_directory, "name", None)

@@ -10,17 +10,22 @@ import barndoor.sdk as bd
 from barndoor.sdk.config import get_config
 from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
+from openai_tool_schema_patch import patch_crewai_tool_schemas
+from barndoor_compat import fetch_all_servers
+
+# MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
+patch_crewai_tool_schemas()
 
 
 async def select_server(sdk: bd.BarndoorSDK) -> tuple[str, str]:
-    servers = await sdk.list_servers()
+    servers = await fetch_all_servers(sdk)
 
-    # Barndoor uses "connected" and "available" for ready-to-use servers
-    usable = [s for s in servers if s.connection_status in ("connected", "available")]
+    # Only "connected" servers are usable; "available"/"pending" are catalog apps.
+    usable = [s for s in servers if s.connection_status == "connected"]
 
     if not usable:
-        print("No usable MCP servers found (need 'connected' or 'available').")
-        print("Check https://app.barndoor.ai/servers")
+        print("No connected MCP servers found.")
+        print("Connect an app at https://app.barndoor.ai/servers")
         raise SystemExit(1)
 
     print("\nUsable MCP Servers")
@@ -93,7 +98,7 @@ async def main() -> None:
 
     # ──────────────────────────────────────────────────────────────
     # Run CrewAI with the MCP tools
-    # ──────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────gen
     with MCPServerAdapter(params) as mcp_tools:
         print(f"\nLoaded {len(mcp_tools)} tools from {server_name}\n")
 

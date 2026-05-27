@@ -3,7 +3,17 @@ name = "crew-ai-python-example"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "barndoor>=0.1.0",
+    "crewai>=1.14.5",
+    "crewai-tools[mcp]>=1.14.5",
+    "streamlit>=1.40",
+    "python-dotenv>=1.0",
 ]
+
+[tool.uv.sources]
+# barndoor is published only via git. Pinned to a post-Keycloak-migration commit:
+# older commits (e.g. 4decc26) hardcode the Auth0 /oauth/token path and 404 against
+# barndoor's current Keycloak IdP. This commit uses OIDC discovery for the token endpoint.
+barndoor = { git = "https://github.com/barndoor-ai/barndoor-sdk.git", rev = "7d804d63df9ef7e9be52c321bb8ee415d02d1a5d" }
