@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
 from openai_tool_schema_patch import patch_crewai_tool_schemas
 from barndoor_compat import fetch_all_servers
+from llm_gateway import make_llm, list_gateway_models, DEFAULT_MODEL, DEMO_UNSUPPORTED_MODELS
 
 # MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
 patch_crewai_tool_schemas()
@@ -96,6 +98,23 @@ async def main() -> None:
         print("Task cannot be empty!")
         raise SystemExit(1)
 
+    # Pick the model served by the Barndoor LLM gateway.
+    default_model = os.getenv("OPENAI_MODEL_NAME", DEFAULT_MODEL)
+    try:
+        gateway_models = list_gateway_models()
+    except Exception as e:
+        print(f"\n(Could not list gateway models: {e})")
+        gateway_models = []
+    if gateway_models:
+        print("\nModels via the Barndoor LLM gateway:")
+        for m in gateway_models:
+            print(f"  - {m}")
+    # Unsupported models the gateway will reject (404) — included to demo that path.
+    print("Not served by the gateway (will fail if chosen):")
+    for m in DEMO_UNSUPPORTED_MODELS:
+        print(f"  - {m}")
+    model = input(f"\nModel [{default_model}]: ").strip() or default_model
+
     # ──────────────────────────────────────────────────────────────
     # Run CrewAI with the MCP tools
     # ──────────────────────────────────────────────────────────────gen
@@ -107,6 +126,7 @@ async def main() -> None:
             goal=f"Help the user with anything in their {server_name} account using real MCP tools.",
             backstory="You are an expert user of this app with full read/write access via Barndoor MCP.",
             tools=mcp_tools,
+            llm=make_llm(model),
             verbose=True,
             allow_delegation=False,
         )

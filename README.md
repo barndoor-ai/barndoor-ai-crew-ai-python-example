@@ -44,6 +44,36 @@ Use **Switch auth** (top-right) to change modes; it re-authenticates on the next
 > servers connected to it in Barndoor, the list will be empty even though your user has connections —
 > use Interactive login in that case. (The CLI, `crew-cli.py`, always uses interactive login.)
 
+## LLM routing & model selection
+
+All LLM traffic is routed through the **Barndoor LLM gateway** — an OpenAI-compatible endpoint —
+instead of calling OpenAI directly. The gateway authenticates with your `OPENAI_API_KEY`, and the
+endpoint is configurable:
+
+```bash
+# .env (optional — this is the default)
+BARNDOOR_LLM_GATEWAY_URL=https://app.barndoor.ai/api/llm-gateway/v1
+```
+
+The model is selectable at runtime, and the choices come **from the gateway** (so they're always valid):
+
+- **Streamlit UI** — a model dropdown populated from the gateway's `/models` (default `gpt-4.1-mini`);
+  you can also type any id the gateway accepts.
+- **CLI** — lists the gateway's models and prompts for one (default `$OPENAI_MODEL_NAME`, else `gpt-4.1-mini`).
+
+> Gateway model ids may be namespaced (e.g. `OpenAI/gpt-4o`). The app forwards the exact id to the
+> gateway, working around CrewAI stripping litellm-style provider prefixes. Routing lives in
+> [`llm_gateway.py`](llm_gateway.py).
+
+### Unsupported-model demo
+
+The menus also include a few models the gateway **doesn't** serve (`OpenAI/gpt-5`, `OpenAI/gpt-5-mini`,
+`OpenAI/gpt-5-nano`, defined as `DEMO_UNSUPPORTED_MODELS` in [`llm_gateway.py`](llm_gateway.py)). They're
+there on purpose: selecting one and running a task shows the gateway rejecting it (HTTP 404, "model not
+found"). The UI catches this and shows a clean message —
+*"The Barndoor LLM gateway doesn't support model '…'. Pick a gateway-served model."* — rather than a raw
+error. The rejection happens during the agent run, when the LLM call actually reaches the gateway.
+
 ## Setup
 
 This is a [uv](https://docs.astral.sh/uv/) project — `pyproject.toml` and `uv.lock` define
