@@ -47,7 +47,7 @@ Use **Switch auth** (top-right) to change modes; it re-authenticates on the next
 ## LLM routing & model selection
 
 All LLM traffic is routed through the **Barndoor LLM gateway** — an OpenAI-compatible endpoint —
-instead of calling OpenAI directly. The gateway authenticates with your `OPENAI_API_KEY`, and the
+instead of calling OpenAI directly. The gateway authenticates with your `LLM_API_KEY`, and the
 endpoint is configurable:
 
 ```bash
@@ -64,6 +64,23 @@ The model is selectable at runtime, and the choices come **from the gateway** (s
 > Gateway model ids may be namespaced (e.g. `OpenAI/gpt-4o`). The app forwards the exact id to the
 > gateway, working around CrewAI stripping litellm-style provider prefixes. Routing lives in
 > [`llm_gateway.py`](llm_gateway.py).
+
+## Theming (per-customer demos)
+
+The Streamlit UI is themed via a single editable file: [`theme.py`](theme.py). Edit the `THEME`
+dict and restart the app to rebrand for whoever you're demoing to. Tokens:
+
+| Group | Keys |
+|---|---|
+| Branding | `company_name`, `title`, `subtitle`, `logo_url`, `logo_height_px` |
+| Browser tab | `page_title`, `page_icon` |
+| Colors | `primary_color`, `primary_color_text`, `background_color`, `secondary_background_color`, `text_color`, `muted_text_color`, `border_color` |
+| Typography | `font_family` |
+
+The logo renders top-right in the page header. `logo_url` accepts an `http(s)://` URL **or** a relative
+path to a local file (e.g. `assets/acme.png`) — local files are base64-embedded so the browser can
+display them. Leave it empty to hide the logo. Colors and font are applied via a CSS block injected
+on every rerun; restart Streamlit after editing `theme.py` to see changes.
 
 ### Unsupported-model demo
 
@@ -95,8 +112,8 @@ Then create a `.env` file next to the scripts:
 AGENT_CLIENT_ID=XXX
 AGENT_CLIENT_SECRET=XXX
 
-# OpenAI key for CrewAI's LLM (https://platform.openai.com/api-keys)
-OPENAI_API_KEY=XXX
+# API key for the Barndoor LLM gateway (a `bd-…` key from app.barndoor.ai).
+LLM_API_KEY=XXX
 
 # Environment selector. "production" (default) = trial/Keycloak; the SDK bakes in
 # the issuer (https://auth.barndoor.ai/realms/barndoor) and discovers endpoints via OIDC.

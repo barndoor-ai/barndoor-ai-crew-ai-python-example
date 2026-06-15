@@ -13,7 +13,13 @@ from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
 from openai_tool_schema_patch import patch_crewai_tool_schemas
 from barndoor_compat import fetch_all_servers
-from llm_gateway import make_llm, list_gateway_models, DEFAULT_MODEL, DEMO_UNSUPPORTED_MODELS
+from llm_gateway import (
+    make_llm,
+    list_gateway_models,
+    DEFAULT_MODEL,
+    DEMO_UNSUPPORTED_MODELS,
+    EXTRA_MODELS,
+)
 
 # MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
 patch_crewai_tool_schemas()
@@ -108,6 +114,11 @@ async def main() -> None:
     if gateway_models:
         print("\nModels via the Barndoor LLM gateway:")
         for m in gateway_models:
+            print(f"  - {m}")
+    extras = [m for m in EXTRA_MODELS if m not in gateway_models]
+    if extras:
+        print("Additional curated models:")
+        for m in extras:
             print(f"  - {m}")
     # Unsupported models the gateway will reject (404) — included to demo that path.
     print("Not served by the gateway (will fail if chosen):")
