@@ -1,16 +1,43 @@
+import os
+import re
+import time
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
+from barndoor_usage import fetch_usage
 import barndoor.sdk as bd
 from barndoor.sdk import BarndoorSDK
 from barndoor.sdk.config import get_static_config
 import asyncio
 from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
+from crewai.events import crewai_event_bus
+from crewai.events.types.crew_events import (
+    CrewKickoffStartedEvent, CrewKickoffCompletedEvent,
+)
+from crewai.events.types.agent_events import AgentExecutionStartedEvent
+from crewai.events.types.task_events import TaskStartedEvent, TaskCompletedEvent
+from crewai.events.types.llm_events import LLMCallStartedEvent, LLMCallCompletedEvent
+from crewai.events.types.tool_usage_events import (
+    ToolUsageStartedEvent, ToolUsageFinishedEvent,
+)
 from openai_tool_schema_patch import patch_crewai_tool_schemas
 from barndoor_compat import fetch_all_servers
-from llm_gateway import make_llm, list_gateway_models, DEFAULT_MODEL, DEMO_UNSUPPORTED_MODELS
+from llm_gateway import (
+    make_llm,
+    list_gateway_models,
+    DEFAULT_MODEL,
+    DEMO_UNSUPPORTED_MODELS,
+    EXTRA_MODELS,
+)
+from theme import apply_theme, page_config_kwargs
+from cloud_oauth import (
+    public_callback_url,
+    build_authorize_request,
+    exchange_code,
+    cache_tokens,
+)
 
 # MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
 patch_crewai_tool_schemas()
@@ -23,14 +50,19 @@ AUTH_MODES = {
 
 @st.cache_data(ttl=300)
 def model_options() -> list[str]:
-    """Gateway-served models, plus unsupported ones to demo the gateway rejecting them."""
+    """Gateway models + curated extras + unsupported demo ids, deduped & order-preserving."""
     try:
         models = list_gateway_models()
     except Exception:
         models = []
     models = models or [DEFAULT_MODEL]
-    # Append models the gateway doesn't serve so a user can pick one and see it fail.
-    return models + [m for m in DEMO_UNSUPPORTED_MODELS if m not in models]
+    seen = set(models)
+    out = list(models)
+    for m in (*EXTRA_MODELS, *DEMO_UNSUPPORTED_MODELS):
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
 
 
 # ─────────────────────────────────────────────
@@ -65,6 +97,23 @@ async def make_sdk(auth_mode: str) -> BarndoorSDK:
         )
 
     return await bd.login_interactive()
+
+
+async def get_session_jwt(auth_mode: str) -> str:
+    """Authenticate and return the SDK session JWT (used as Bearer for Barndoor APIs)."""
+    sdk = await make_sdk(auth_mode)
+    try:
+        return sdk.token
+    finally:
+        await sdk.aclose()
+
+
+# Strip embedded images from agent output: both markdown ![alt](url) and any <img> HTML.
+_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)|<img[^>]*/?>", re.IGNORECASE)
+
+
+def _strip_images(text: str) -> str:
+    return _IMAGE_RE.sub("", text)
 
 
 # ─────────────────────────────────────────────
@@ -126,7 +175,7 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
             result = await crew.kickoff_async()
 
         log("Done!")
-        return str(result), display_name
+        return _strip_images(str(result)), display_name
 
     except Exception as e:
         detail = str(e).lower()
@@ -172,11 +221,41 @@ def load_servers(auth_mode: str):
 
 
 # ─────────────────────────────────────────────
-# Page Config
+# Page Config + theme
 # ─────────────────────────────────────────────
-st.set_page_config(page_title="Barndoor + CrewAI Assistant", layout="centered", page_icon="Robot")
-st.title("Barndoor MCP + CrewAI Universal Assistant")
-st.markdown("Connect any app — Notion, Salesforce, Gmail, Slack, GitHub, Box — and get real results.")
+st.set_page_config(**page_config_kwargs())
+apply_theme()
+
+
+# ─────────────────────────────────────────────
+# Server-side OAuth callback (hosted deployments)
+# Keycloak redirects back to STREAMLIT_PUBLIC_URL with ?code=…&state=…; we exchange
+# the code, cache tokens to disk, then let bd.login_interactive() pick them up.
+# ─────────────────────────────────────────────
+_qp = st.query_params
+if "code" in _qp:
+    _pending = st.session_state.get("oauth_pending")
+    if _pending:
+        if _qp.get("state") != _pending["state"]:
+            st.error("OAuth state mismatch — possible CSRF. Aborted.")
+            st.session_state.pop("oauth_pending", None)
+            st.query_params.clear()
+            st.stop()
+        try:
+            tokens = exchange_code(
+                _pending["redirect_uri"], _qp["code"], _pending["code_verifier"]
+            )
+            cache_tokens(tokens)
+        except Exception as e:
+            st.error(f"OAuth callback failed: {type(e).__name__}: {e}")
+            st.session_state.pop("oauth_pending", None)
+            st.query_params.clear()
+            st.stop()
+        st.session_state.auth_mode = "interactive"
+        st.session_state.pop("oauth_pending", None)
+    # Either way, strip the OAuth params from the URL and rerun cleanly.
+    st.query_params.clear()
+    st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -186,6 +265,21 @@ if "auth_mode" not in st.session_state:
     st.session_state.auth_mode = None
 
 if st.session_state.auth_mode is None:
+    # If we previously started a server-side OAuth flow but haven't received the
+    # callback yet, show the "Sign in" link instead of the radio.
+    pending = st.session_state.get("oauth_pending")
+    if pending:
+        st.subheader("Sign in to continue")
+        st.markdown(
+            "Click below to sign in with Barndoor. You'll be redirected back here "
+            "automatically once authenticated."
+        )
+        st.link_button("🔐 Sign in with Barndoor", pending["url"], type="primary")
+        if st.button("Cancel"):
+            st.session_state.pop("oauth_pending", None)
+            st.rerun()
+        st.stop()
+
     st.subheader("How do you want to authenticate?")
     choice = st.radio(
         "Authentication method",
@@ -198,7 +292,19 @@ if st.session_state.auth_mode is None:
         label_visibility="collapsed",
     )
     if st.button("Continue", type="primary"):
-        st.session_state.auth_mode = choice
+        redirect_uri = public_callback_url()
+        if choice == "interactive" and redirect_uri:
+            # Hosted deployment: start a web-app PKCE flow that lands back here.
+            req = build_authorize_request(redirect_uri)
+            st.session_state.oauth_pending = {
+                "url": req.url,
+                "state": req.state,
+                "code_verifier": req.code_verifier,
+                "redirect_uri": redirect_uri,
+            }
+        else:
+            # Local dev (loopback flow) or M2M: proceed straight to make_sdk().
+            st.session_state.auth_mode = choice
         st.rerun()
     st.stop()
 
@@ -207,6 +313,7 @@ top_left, top_right = st.columns([3, 1])
 top_left.caption(f"Authenticated via: **{AUTH_MODES[auth_mode]}**")
 if top_right.button("Switch auth"):
     st.session_state.auth_mode = None
+    st.session_state.pop("oauth_pending", None)
     load_servers.clear()  # re-authenticate on next load
     st.rerun()
 
@@ -227,47 +334,277 @@ if not servers or list(servers.values())[0] is None:
         st.error("No connected MCP servers found. Go to https://app.barndoor.ai and connect an app.")
     st.stop()
 
-server_choice = st.selectbox("Choose your app:", options=list(servers.keys()))
-selected_slug = servers[server_choice]
+# Attachment helpers --------------------------------------------------------
+_TEXT_EXT = {
+    ".txt", ".md", ".csv", ".json", ".log", ".yaml", ".yml", ".toml", ".ini",
+    ".html", ".xml", ".sql", ".py", ".js", ".ts", ".sh",
+}
+_TEXT_CHAR_CAP = 50_000
 
-_models = model_options()
-model = st.selectbox(
-    "Model (via Barndoor LLM gateway):",
-    options=_models,
-    index=_models.index(DEFAULT_MODEL) if DEFAULT_MODEL in _models else 0,
-    accept_new_options=True,
-    help="Models served by the Barndoor LLM gateway. You can also type any other id it accepts.",
-)
 
-query = st.text_area(
-    "What do you want to do?",
-    placeholder="Examples:\n• List my recent Salesforce opportunities\n• Summarize Notion pages tagged 'Q4'\n• Show unread Gmail from last 3 days",
-    height=140,
-)
+def _is_text_attachment(name: str, mime: str | None) -> bool:
+    if (mime or "").startswith("text/"):
+        return True
+    return any(name.lower().endswith(ext) for ext in _TEXT_EXT)
 
-if st.button("Run Agent", type="primary", use_container_width=True):
-    if not query.strip():
-        st.warning("Please enter a task.")
+
+def _augment_query_with_files(text: str, files: list) -> str:
+    """Inline text-file content and reference binaries by name so the agent sees them."""
+    if not files:
+        return text
+    parts = [text, "\n\n## Attached files"]
+    for f in files:
+        parts.append(f"\n### {f.name}  ({f.type or 'unknown'}, {f.size:,} bytes)")
+        try:
+            data = f.read()
+        except Exception as e:
+            parts.append(f"\n(could not read: {e})")
+            continue
+        if _is_text_attachment(f.name, f.type):
+            body = data.decode("utf-8", errors="replace")
+            if len(body) > _TEXT_CHAR_CAP:
+                body = body[:_TEXT_CHAR_CAP] + f"\n…[truncated; original {len(body):,} chars]"
+            parts.append(f"\n```\n{body}\n```")
+        else:
+            parts.append("\n_(binary file — referenced by name; not inlined in this demo)_")
+    return "".join(parts)
+
+
+# Chat history (persists across submissions in this session) ---------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+
+def _render_user_msg(msg: dict) -> None:
+    with st.chat_message("user"):
+        if msg.get("text"):
+            st.markdown(msg["text"])
+        if msg.get("files"):
+            st.caption("📎 " + " · ".join(msg["files"]))
+
+
+def _render_assistant_msg(msg: dict) -> None:
+    with st.chat_message("assistant"):
+        if msg.get("is_error"):
+            st.error(msg["text"])
+        else:
+            st.markdown(msg["text"])
+        st.caption(
+            f"App: **{msg['app']}** · Model: **{msg['model']}** · {msg['ts']}"
+        )
+        if msg.get("log_html"):
+            with st.expander("Run log"):
+                st.markdown(msg["log_html"], unsafe_allow_html=True)
+
+
+# Replay prior turns
+for prior in st.session_state.messages:
+    if prior["role"] == "user":
+        _render_user_msg(prior)
+    else:
+        _render_assistant_msg(prior)
+
+# "New chat" reset, only visible when there's something to clear
+if st.session_state.messages:
+    _, reset_col = st.columns([5, 1])
+    if reset_col.button("New chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+
+# Compact connection settings: expanded on first load, collapsed once a thread starts
+with st.expander("App & model", expanded=not st.session_state.messages):
+    server_choice = st.selectbox("Choose your app:", options=list(servers.keys()))
+    selected_slug = servers[server_choice]
+
+    _models = model_options()
+    model = st.selectbox(
+        "Model (via Barndoor LLM gateway):",
+        options=_models,
+        index=_models.index(DEFAULT_MODEL) if DEFAULT_MODEL in _models else 0,
+        accept_new_options=True,
+        help="Models served by the Barndoor LLM gateway. You can also type any other id it accepts.",
+    )
+
+st.caption(f"Asking **{server_choice}** with **{model}**")
+
+
+# API key usage (calls https://app.barndoor.ai/api/llm-usage/query) ---------
+with st.expander("API key usage", expanded=False):
+    usage_key_id = os.getenv("BARNDOOR_API_KEY", "")
+    if usage_key_id:
+        st.caption(f"Querying API key: `{usage_key_id}`")
+    else:
+        st.warning("Set `BARNDOOR_API_KEY` in `.env` to enable usage queries.")
+
+    today = datetime.now(timezone.utc).date()
+    date_cols = st.columns(2)
+    usage_from = date_cols[0].date_input("From", value=today - timedelta(days=30))
+    usage_to = date_cols[1].date_input("To", value=today)
+    usage_limit = st.number_input(
+        "Limit", min_value=1, max_value=1000, value=100, step=10
+    )
+
+    if st.button("Fetch usage", disabled=not usage_key_id):
+        if not usage_key_id:
+            st.warning("Missing BARNDOOR_API_KEY.")
+        else:
+            from_iso = (
+                datetime.combine(usage_from, datetime.min.time(), tzinfo=timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%SZ")
+            )
+            to_iso = (
+                datetime.combine(usage_to, datetime.min.time(), tzinfo=timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%SZ")
+            )
+            try:
+                with st.spinner("Querying usage…"):
+                    jwt = asyncio.run(get_session_jwt(auth_mode))
+                    usage = fetch_usage(
+                        usage_key_id,
+                        from_iso,
+                        to_iso,
+                        limit=int(usage_limit),
+                        bearer=jwt,
+                    )
+                records = usage.get("data") if isinstance(usage, dict) else usage
+                if isinstance(records, list):
+                    st.caption(f"{len(records)} record(s)")
+                    if records:
+                        st.dataframe(records, use_container_width=True)
+                    else:
+                        st.info("No usage records in that range.")
+                else:
+                    st.write(usage)
+                with st.expander("Raw response"):
+                    st.json(usage)
+            except Exception as e:
+                st.error(f"Usage fetch failed: {type(e).__name__}: {e}")
+
+
+# Placeholder above the form: fills with live progress during a run, then clears.
+progress = st.empty()
+
+
+# Inline prompt form (text + multi-file uploader + Run button) -------------
+with st.form("prompt_form", clear_on_submit=True):
+    prompt_text = st.text_area(
+        "What do you want to do?",
+        placeholder=(
+            "Examples:\n"
+            "• List my recent Salesforce opportunities\n"
+            "• Summarize Notion pages tagged 'Q4'\n"
+            "• Show unread Gmail from last 3 days"
+        ),
+        height=140,
+    )
+    uploaded = st.file_uploader(
+        "Attach files (optional)",
+        accept_multiple_files=True,
+    )
+    submitted = st.form_submit_button(
+        "Run Agent", type="primary", use_container_width=True
+    )
+
+if submitted:
+    prompt_text = (prompt_text or "").strip()
+    uploaded = uploaded or []
+    if not prompt_text and not uploaded:
+        st.warning("Please enter a task or attach a file.")
         st.stop()
 
-    log_placeholder = st.empty()
-    log_lines = []
+    file_names = [f.name for f in uploaded]
+    full_query = _augment_query_with_files(prompt_text, uploaded)
 
-    def log(msg):
+    # Live log: every entry updates the progress placeholder above the form so the user
+    # sees task started / agent started / LLM thinking / tool calls / completion as they happen.
+    log_lines: list[str] = []
+
+    def log(m):
         ts = datetime.now().strftime("%H:%M:%S")
-        log_lines.append(f"<small>{ts}</small> {msg}")
-        log_placeholder.markdown("\n".join(log_lines), unsafe_allow_html=True)
+        log_lines.append(f"<small>{ts}</small> {m}")
+        progress.markdown("<br>".join(log_lines), unsafe_allow_html=True)
 
-    with st.spinner("Working..."):
-        # This is the CORRECT way in Streamlit
-        result, app_name = asyncio.run(run_crewai_task(selected_slug, query, log, auth_mode, model))
+    if uploaded:
+        log(f"📎 Attached: {', '.join(file_names)}")
 
-    st.markdown("---")
-    st.subheader(f"Result from {app_name}")
+    # Track per-call start times so we can show duration on completion.
+    _last_llm_start = {"t": None}
+    _tool_starts: dict[str, float] = {}
 
-    if result.startswith("Error:"):
-        st.error(result)
-    else:
-        st.markdown(result)
+    with crewai_event_bus.scoped_handlers():
+        @crewai_event_bus.on(CrewKickoffStartedEvent)
+        def _on_kickoff_start(source, event):
+            log("🚀 Crew kicked off")
 
-    st.caption(f"Completed • {datetime.now():%Y-%m-%d %I:%M %p}")
+        @crewai_event_bus.on(TaskStartedEvent)
+        def _on_task_start(source, event):
+            log("📋 Task started")
+
+        @crewai_event_bus.on(AgentExecutionStartedEvent)
+        def _on_agent_start(source, event):
+            role = getattr(getattr(event, "agent", None), "role", None) or "agent"
+            log(f"🤖 Agent started: **{role}**")
+
+        @crewai_event_bus.on(LLMCallStartedEvent)
+        def _on_llm_start(source, event):
+            _last_llm_start["t"] = time.perf_counter()
+            log("💬 LLM thinking…")
+
+        @crewai_event_bus.on(LLMCallCompletedEvent)
+        def _on_llm_done(source, event):
+            t0 = _last_llm_start["t"]
+            if t0:
+                log(f"✓ LLM responded ({time.perf_counter() - t0:.1f}s)")
+                _last_llm_start["t"] = None
+            else:
+                log("✓ LLM responded")
+
+        @crewai_event_bus.on(ToolUsageStartedEvent)
+        def _on_tool_start(source, event):
+            name = getattr(event, "tool_name", "?")
+            _tool_starts[name] = time.perf_counter()
+            log(f"🔧 Tool: `{name}`")
+
+        @crewai_event_bus.on(ToolUsageFinishedEvent)
+        def _on_tool_done(source, event):
+            name = getattr(event, "tool_name", "?")
+            try:
+                dur = (event.finished_at - event.started_at).total_seconds()
+            except Exception:
+                t0 = _tool_starts.pop(name, None)
+                dur = (time.perf_counter() - t0) if t0 else None
+            log(f"✓ Tool `{name}` done" + (f" ({dur:.1f}s)" if dur is not None else ""))
+
+        @crewai_event_bus.on(TaskCompletedEvent)
+        def _on_task_done(source, event):
+            log("📋 Task completed")
+
+        @crewai_event_bus.on(CrewKickoffCompletedEvent)
+        def _on_kickoff_done(source, event):
+            log("🏁 Final answer ready")
+
+        with st.spinner("Running…"):
+            result, app_name = asyncio.run(
+                run_crewai_task(selected_slug, full_query, log, auth_mode, model)
+            )
+
+    progress.empty()  # clear live progress; full log is preserved in the history expander
+
+    is_error = result.startswith("Error:")
+    ts_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+    log_html = "<br>".join(log_lines)
+
+    st.session_state.messages.append(
+        {"role": "user", "text": prompt_text, "files": file_names}
+    )
+    st.session_state.messages.append({
+        "role": "assistant",
+        "text": result,
+        "app": app_name,
+        "model": model,
+        "ts": ts_str,
+        "log_html": log_html,
+        "is_error": is_error,
+    })
+    st.rerun()
