@@ -1,5 +1,11 @@
-barndoor
-crewai
-crewai-tools
-crewai-tools[mcp]
-streamlit
+# Streamlit Cloud reads this file directly (it doesn't run `uv sync`).
+# Keep dep versions roughly aligned with pyproject.toml / uv.lock for local dev.
+
+streamlit>=1.40
+crewai>=1.14.5
+crewai-tools[mcp]>=1.14.5
+python-dotenv>=1.0
+httpx>=0.27
+
+# Barndoor SDK is git-only — pin to the same commit as [tool.uv.sources] in pyproject.toml.
+barndoor @ git+https://github.com/barndoor-ai/barndoor-sdk.git@7d804d63df9ef7e9be52c321bb8ee415d02d1a5d

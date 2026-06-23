@@ -27,7 +27,7 @@ DEFAULT_MODEL = "OpenAI/gpt-4o-mini"
 
 # Models the gateway intentionally does NOT serve. Offered in the menus so a demo can
 # show the gateway rejecting an unsupported model (it returns 404 "model not found").
-DEMO_UNSUPPORTED_MODELS = ["OpenAI/gpt-5", "OpenAI/gpt-5-mini", "OpenAI/gpt-5-nano"]
+DEMO_UNSUPPORTED_MODELS = ["OpenAI/gpt-5.4", "OpenAI/gpt-5.4-mini", "OpenAI/gpt-5.4-nano"]
 
 # User-curated additions surfaced in the menus alongside what /models exposes.
 # Prefixed with the gateway's provider namespace so the literal id reaches the
