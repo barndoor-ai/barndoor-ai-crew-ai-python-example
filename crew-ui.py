@@ -1,6 +1,17 @@
 import os
 import re
+import sys
 import time
+
+# Streamlit Cloud's Linux container defaults stdout/stderr to ASCII; CrewAI's
+# verbose logging includes emojis and Unicode ellipses and blows up. macOS is
+# UTF-8 by default so this only shows up after deploy. Force UTF-8 here.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
