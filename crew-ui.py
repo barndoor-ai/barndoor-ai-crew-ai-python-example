@@ -4,19 +4,77 @@ import io
 import os
 import re
 import sys
+import threading
 import time
+
+_ASCII_TRANSLATION = str.maketrans(
+    {
+        "\u00a0": " ",
+        "\u00b7": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2022": "-",
+        "\u2026": "...",
+        "\u2192": "->",
+        "\u2713": "OK",
+        "\u2714": "OK",
+    }
+)
+
+
+def _ascii_safe(value: object) -> str:
+    """Return display text safe for ASCII-only logging sinks."""
+    text = str(value).translate(_ASCII_TRANSLATION)
+    return text.encode("ascii", errors="ignore").decode("ascii")
+
+
+class _AsciiFallbackTextIO:
+    """Proxy a text stream and retry writes with ASCII-safe text on encode errors."""
+
+    _codex_ascii_fallback = True
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text):
+        try:
+            return self._stream.write(text)
+        except UnicodeEncodeError:
+            return self._stream.write(_ascii_safe(text))
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+    def flush(self):
+        return self._stream.flush()
+
+    def isatty(self):
+        return self._stream.isatty()
+
+    def reconfigure(self, *args, **kwargs):
+        return self._stream.reconfigure(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
 
 # Streamlit Cloud's Linux container defaults stdout/stderr to ASCII; CrewAI's
 # verbose logging includes emojis and Unicode ellipses and blows up. macOS is
-# UTF-8 by default so this only shows up after deploy. Force UTF-8 here.
-for _stream in (sys.stdout, sys.stderr):
+# UTF-8 by default so this only shows up after deploy. Force UTF-8 when possible,
+# then guard writes from libraries that keep ASCII-only stream handles.
+for _name in ("stdout", "stderr"):
+    _stream = getattr(sys, _name)
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
+    if not getattr(_stream, "_codex_ascii_fallback", False):
+        setattr(sys, _name, _AsciiFallbackTextIO(_stream))
 
 # CrewAI's telemetry POSTs usage data; on Streamlit Cloud the body encoding can
 # crash on Unicode prompt content. Opt out — we don't need it for this demo.
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
 
@@ -65,27 +123,6 @@ from cloud_oauth import (
 
 # MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
 patch_crewai_tool_schemas()
-
-_ASCII_TRANSLATION = str.maketrans(
-    {
-        "\u00a0": " ",
-        "\u00b7": "-",
-        "\u2013": "-",
-        "\u2014": "-",
-        "\u2022": "-",
-        "\u2026": "...",
-        "\u2192": "->",
-        "\u2713": "OK",
-        "\u2714": "OK",
-    }
-)
-
-
-def _ascii_safe(value: object) -> str:
-    """Return display text safe for ASCII-only logging sinks."""
-    text = str(value).translate(_ASCII_TRANSLATION)
-    return text.encode("ascii", errors="ignore").decode("ascii")
-
 
 @contextlib.contextmanager
 def _suppress_crewai_console_output():
@@ -441,10 +478,10 @@ def _augment_query_with_files(text: str, files: list) -> str:
         if _is_text_attachment(f.name, f.type):
             body = data.decode("utf-8", errors="replace")
             if len(body) > _TEXT_CHAR_CAP:
-                body = body[:_TEXT_CHAR_CAP] + f"\n…[truncated; original {len(body):,} chars]"
+                body = body[:_TEXT_CHAR_CAP] + f"\n...[truncated; original {len(body):,} chars]"
             parts.append(f"\n```\n{body}\n```")
         else:
-            parts.append("\n_(binary file — referenced by name; not inlined in this demo)_")
+            parts.append("\n_(binary file - referenced by name; not inlined in this demo)_")
     return "".join(parts)
 
 
@@ -603,8 +640,9 @@ if submitted:
         log_lines.append(f"<small>{ts}</small> {html.escape(_ascii_safe(m), quote=False)}")
         # CrewAI dispatches event handlers from background threads. Streamlit refuses
         # to render to the placeholder from a non-main thread; on Streamlit Cloud this
-        # raises an exception that propagates back to CrewAI as "LLM call failed".
-        # Silently swallow — the lines stay in log_lines and render after the run.
+        # emits noisy ScriptRunContext warnings. The lines still render after the run.
+        if threading.current_thread() is not threading.main_thread():
+            return
         try:
             progress.markdown("<br>".join(log_lines), unsafe_allow_html=True)
         except Exception:
