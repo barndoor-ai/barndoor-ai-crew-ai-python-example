@@ -12,6 +12,11 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+# CrewAI's telemetry POSTs usage data; on Streamlit Cloud the body encoding can
+# crash on Unicode prompt content. Opt out — we don't need it for this demo.
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
+
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -174,7 +179,10 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
                 backstory=f"You are a master of {display_name} with full access via Barndoor MCP.",
                 tools=tools,
                 llm=make_llm(model),
-                verbose=True,
+                # verbose=True prints emoji/Unicode via rich.Console, which crashes on
+                # Streamlit Cloud's ASCII-captured stdout. Our event-bus log shows the
+                # same progress in the UI's Run log, so verbose terminal output is redundant.
+                verbose=False,
                 allow_delegation=False,
             )
 
@@ -184,7 +192,7 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
                 agent=agent,
             )
 
-            crew = Crew(agents=[agent], tasks=[task], verbose=True)
+            crew = Crew(agents=[agent], tasks=[task], verbose=False)
             log("Running task...")
             result = await crew.kickoff_async()
 
