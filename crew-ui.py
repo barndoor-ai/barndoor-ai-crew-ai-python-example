@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+import traceback
 
 from encoding_safety import ascii_safe, install_ascii_stdio_fallback
 
@@ -224,7 +225,11 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
         else:
             error_msg = f"Error: {type(e).__name__}: {e}"
         log(error_msg)
-        return error_msg, "Error"
+        # Surface the originating frame so we can diagnose where it actually failed.
+        tb = traceback.format_exc()
+        for line in tb.splitlines()[-12:]:
+            log(line)
+        return error_msg + "\n\n```\n" + tb + "\n```", "Error"
     finally:
         if sdk:
             await sdk.aclose()
