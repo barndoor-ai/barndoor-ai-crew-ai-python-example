@@ -1,4 +1,5 @@
 import contextlib
+import html
 import io
 import os
 import re
@@ -31,6 +32,7 @@ import asyncio
 from crewai import Agent, Task, Crew
 from crewai_tools import MCPServerAdapter
 from crewai.events import crewai_event_bus
+from crewai.events.listeners.tracing.utils import set_suppress_tracing_messages
 from crewai.events.types.crew_events import (
     CrewKickoffStartedEvent, CrewKickoffCompletedEvent,
 )
@@ -40,6 +42,7 @@ from crewai.events.types.llm_events import LLMCallStartedEvent, LLMCallCompleted
 from crewai.events.types.tool_usage_events import (
     ToolUsageStartedEvent, ToolUsageFinishedEvent,
 )
+from crewai.events.utils.console_formatter import set_suppress_console_output
 from openai_tool_schema_patch import patch_crewai_tool_schemas
 from barndoor_compat import fetch_all_servers
 from llm_gateway import (
@@ -62,6 +65,42 @@ from cloud_oauth import (
 
 # MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
 patch_crewai_tool_schemas()
+
+_ASCII_TRANSLATION = str.maketrans(
+    {
+        "\u00a0": " ",
+        "\u00b7": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2022": "-",
+        "\u2026": "...",
+        "\u2192": "->",
+        "\u2713": "OK",
+        "\u2714": "OK",
+    }
+)
+
+
+def _ascii_safe(value: object) -> str:
+    """Return display text safe for ASCII-only logging sinks."""
+    text = str(value).translate(_ASCII_TRANSLATION)
+    return text.encode("ascii", errors="ignore").decode("ascii")
+
+
+@contextlib.contextmanager
+def _suppress_crewai_console_output():
+    """Disable CrewAI console/tracing chatter during Streamlit runs."""
+    tokens = [
+        set_suppress_console_output(True),
+        set_suppress_tracing_messages(True),
+    ]
+    try:
+        yield
+    finally:
+        for token in reversed(tokens):
+            var = getattr(token, "var", None)
+            if var is not None:
+                var.reset(token)
 
 AUTH_MODES = {
     "interactive": "Interactive login (browser)",
@@ -194,7 +233,7 @@ async def run_crewai_task(server_slug: str, user_query: str, log, auth_mode: str
                 agent=agent,
             )
 
-            crew = Crew(agents=[agent], tasks=[task], verbose=False)
+            crew = Crew(agents=[agent], tasks=[task], verbose=False, tracing=False)
             log("Running task...")
             result = await crew.kickoff_async()
 
@@ -497,7 +536,7 @@ with st.expander("API key usage", expanded=False):
                 .strftime("%Y-%m-%dT%H:%M:%SZ")
             )
             try:
-                with st.spinner("Querying usage…"):
+                with st.spinner("Querying usage..."):
                     jwt = asyncio.run(get_session_jwt(auth_mode))
                     usage = fetch_usage(
                         usage_key_id,
@@ -561,7 +600,7 @@ if submitted:
 
     def log(m):
         ts = datetime.now().strftime("%H:%M:%S")
-        log_lines.append(f"<small>{ts}</small> {m}")
+        log_lines.append(f"<small>{ts}</small> {html.escape(_ascii_safe(m), quote=False)}")
         # CrewAI dispatches event handlers from background threads. Streamlit refuses
         # to render to the placeholder from a non-main thread; on Streamlit Cloud this
         # raises an exception that propagates back to CrewAI as "LLM call failed".
@@ -572,7 +611,7 @@ if submitted:
             pass
 
     if uploaded:
-        log(f"📎 Attached: {', '.join(file_names)}")
+        log(f"Attached: {', '.join(file_names)}")
 
     # Track per-call start times so we can show duration on completion.
     _last_llm_start = {"t": None}
@@ -581,36 +620,36 @@ if submitted:
     with crewai_event_bus.scoped_handlers():
         @crewai_event_bus.on(CrewKickoffStartedEvent)
         def _on_kickoff_start(source, event):
-            log("🚀 Crew kicked off")
+            log("Crew kicked off")
 
         @crewai_event_bus.on(TaskStartedEvent)
         def _on_task_start(source, event):
-            log("📋 Task started")
+            log("Task started")
 
         @crewai_event_bus.on(AgentExecutionStartedEvent)
         def _on_agent_start(source, event):
             role = getattr(getattr(event, "agent", None), "role", None) or "agent"
-            log(f"🤖 Agent started: **{role}**")
+            log(f"Agent started: **{role}**")
 
         @crewai_event_bus.on(LLMCallStartedEvent)
         def _on_llm_start(source, event):
             _last_llm_start["t"] = time.perf_counter()
-            log("💬 LLM thinking…")
+            log("LLM thinking...")
 
         @crewai_event_bus.on(LLMCallCompletedEvent)
         def _on_llm_done(source, event):
             t0 = _last_llm_start["t"]
             if t0:
-                log(f"✓ LLM responded ({time.perf_counter() - t0:.1f}s)")
+                log(f"LLM responded ({time.perf_counter() - t0:.1f}s)")
                 _last_llm_start["t"] = None
             else:
-                log("✓ LLM responded")
+                log("LLM responded")
 
         @crewai_event_bus.on(ToolUsageStartedEvent)
         def _on_tool_start(source, event):
             name = getattr(event, "tool_name", "?")
             _tool_starts[name] = time.perf_counter()
-            log(f"🔧 Tool: `{name}`")
+            log(f"Tool: `{name}`")
 
         @crewai_event_bus.on(ToolUsageFinishedEvent)
         def _on_tool_done(source, event):
@@ -620,22 +659,23 @@ if submitted:
             except Exception:
                 t0 = _tool_starts.pop(name, None)
                 dur = (time.perf_counter() - t0) if t0 else None
-            log(f"✓ Tool `{name}` done" + (f" ({dur:.1f}s)" if dur is not None else ""))
+            log(f"Tool `{name}` done" + (f" ({dur:.1f}s)" if dur is not None else ""))
 
         @crewai_event_bus.on(TaskCompletedEvent)
         def _on_task_done(source, event):
-            log("📋 Task completed")
+            log("Task completed")
 
         @crewai_event_bus.on(CrewKickoffCompletedEvent)
         def _on_kickoff_done(source, event):
-            log("🏁 Final answer ready")
+            log("Final answer ready")
 
-        with st.spinner("Running…"):
+        with st.spinner("Running..."):
             # Streamlit Cloud captures stdout/stderr as ASCII; CrewAI/litellm/rich
             # print Unicode (emojis, ellipses) during the run and crash on encode.
             # Redirect both to UTF-8 StringIO buffers — anything they print is
             # discarded silently. The UI log keeps working (it doesn't touch stdout).
             with (
+                _suppress_crewai_console_output(),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
