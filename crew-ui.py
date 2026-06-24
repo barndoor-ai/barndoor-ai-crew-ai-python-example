@@ -37,6 +37,9 @@ from cloud_oauth import (
     build_authorize_request,
     exchange_code,
     cache_tokens,
+    save_pending,
+    load_pending,
+    clear_pending,
 )
 
 # MCP tool schemas can omit array `items` types; backfill them so OpenAI accepts the tools.
@@ -234,26 +237,37 @@ apply_theme()
 # ─────────────────────────────────────────────
 _qp = st.query_params
 if "code" in _qp:
-    _pending = st.session_state.get("oauth_pending")
-    if _pending:
-        if _qp.get("state") != _pending["state"]:
-            st.error("OAuth state mismatch — possible CSRF. Aborted.")
-            st.session_state.pop("oauth_pending", None)
-            st.query_params.clear()
-            st.stop()
-        try:
-            tokens = exchange_code(
-                _pending["redirect_uri"], _qp["code"], _pending["code_verifier"]
-            )
-            cache_tokens(tokens)
-        except Exception as e:
-            st.error(f"OAuth callback failed: {type(e).__name__}: {e}")
-            st.session_state.pop("oauth_pending", None)
-            st.query_params.clear()
-            st.stop()
-        st.session_state.auth_mode = "interactive"
+    # st.session_state can be wiped by the full-page redirect on Streamlit Cloud,
+    # so fall back to the disk-persisted copy of state + verifier.
+    _pending = st.session_state.get("oauth_pending") or load_pending()
+    if not _pending:
+        st.error(
+            "OAuth callback arrived with no pending request on this server. "
+            "Click **Sign in with Barndoor** again from the landing page."
+        )
+        st.query_params.clear()
+        st.stop()
+    if _qp.get("state") != _pending["state"]:
+        st.error("OAuth state mismatch — possible CSRF. Aborted.")
         st.session_state.pop("oauth_pending", None)
-    # Either way, strip the OAuth params from the URL and rerun cleanly.
+        clear_pending()
+        st.query_params.clear()
+        st.stop()
+    try:
+        tokens = exchange_code(
+            _pending["redirect_uri"], _qp["code"], _pending["code_verifier"]
+        )
+        cache_tokens(tokens)
+    except Exception as e:
+        st.error(f"OAuth callback failed: {type(e).__name__}: {e}")
+        st.session_state.pop("oauth_pending", None)
+        clear_pending()
+        st.query_params.clear()
+        st.stop()
+    st.session_state.auth_mode = "interactive"
+    st.session_state.pop("oauth_pending", None)
+    clear_pending()
+    # Strip OAuth params from the URL and rerun cleanly.
     st.query_params.clear()
     st.rerun()
 
@@ -277,6 +291,7 @@ if st.session_state.auth_mode is None:
         st.link_button("🔐 Sign in with Barndoor", pending["url"], type="primary")
         if st.button("Cancel"):
             st.session_state.pop("oauth_pending", None)
+            clear_pending()
             st.rerun()
         st.stop()
 
@@ -302,6 +317,8 @@ if st.session_state.auth_mode is None:
                 "code_verifier": req.code_verifier,
                 "redirect_uri": redirect_uri,
             }
+            # Mirror to disk too — st.session_state is unreliable across the redirect.
+            save_pending(req.state, req.code_verifier, redirect_uri)
         else:
             # Local dev (loopback flow) or M2M: proceed straight to make_sdk().
             st.session_state.auth_mode = choice
@@ -314,6 +331,7 @@ top_left.caption(f"Authenticated via: **{AUTH_MODES[auth_mode]}**")
 if top_right.button("Switch auth"):
     st.session_state.auth_mode = None
     st.session_state.pop("oauth_pending", None)
+    clear_pending()
     load_servers.clear()  # re-authenticate on next load
     st.rerun()
 

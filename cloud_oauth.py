@@ -22,11 +22,18 @@ SDK's normal loopback flow for local development.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 from barndoor.sdk.auth import AuthorizationRequest, create_authorization_request, exchange_code_for_token
 from barndoor.sdk.auth_store import save_user_token
 from barndoor.sdk.config import get_static_config
+
+# State + PKCE verifier must survive the full-page redirect to Keycloak and back.
+# st.session_state is *not* reliable for that on Streamlit Cloud (a new WebSocket
+# session can land on the callback URL), so we mirror the pending values to disk.
+_PENDING_FILE = Path.home() / ".barndoor" / "oauth_pending.json"
 
 
 def public_callback_url() -> str | None:
@@ -71,3 +78,32 @@ def exchange_code(redirect_uri: str, code: str, code_verifier: str) -> dict:
 def cache_tokens(tokens: dict) -> None:
     """Persist tokens to ``~/.barndoor/token.json`` so login_interactive uses them next."""
     save_user_token(tokens)
+
+
+def save_pending(state: str, code_verifier: str, redirect_uri: str) -> None:
+    """Persist the OAuth-pending values to disk so we can recover them on callback
+    even when ``st.session_state`` was wiped by the full-page redirect."""
+    _PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PENDING_FILE.write_text(
+        json.dumps(
+            {"state": state, "code_verifier": code_verifier, "redirect_uri": redirect_uri}
+        )
+    )
+
+
+def load_pending() -> dict | None:
+    """Return the pending OAuth values from disk, or ``None`` if absent/corrupt."""
+    if not _PENDING_FILE.exists():
+        return None
+    try:
+        return json.loads(_PENDING_FILE.read_text())
+    except Exception:
+        return None
+
+
+def clear_pending() -> None:
+    """Remove the pending OAuth file (after success, failure, or cancel)."""
+    try:
+        _PENDING_FILE.unlink()
+    except FileNotFoundError:
+        pass
