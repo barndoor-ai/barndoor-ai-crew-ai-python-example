@@ -32,8 +32,12 @@ THEME: dict = {
     "page_title": "Barndoor + CrewAI Assistant",
     "page_icon": "🤖",
     # ── Colors ──────────────────────────────────────────────────
-    "primary_color": "#2563EB",
-    "primary_color_text": "#FFFFFF",
+    # Primary palette — three shades let buttons have a real hover state and
+    # subtle accents (default Material-style dark green).
+    "primary_color": "#2E7D32",        # main: buttons, header title, h1/h2/h3
+    "primary_color_light": "#66BB6A",  # light: subtle accents / highlights
+    "primary_color_dark": "#1B5E20",   # dark:  button hover / pressed
+    "primary_color_text": "#FFFFFF",   # text on top of primary fills
     "background_color": "#FFFFFF",
     "secondary_background_color": "#F8FAFC",
     "text_color": "#0F172A",
@@ -84,6 +88,8 @@ def apply_theme() -> None:
         <style>
           :root {{
             --primary: {t["primary_color"]};
+            --primary-light: {t["primary_color_light"]};
+            --primary-dark: {t["primary_color_dark"]};
             --primary-text: {t["primary_color_text"]};
             --bg: {t["background_color"]};
             --bg-secondary: {t["secondary_background_color"]};
@@ -104,8 +110,12 @@ def apply_theme() -> None:
           .stApp [data-testid="stMarkdownContainer"] strong,
           .stApp [data-testid="stMarkdownContainer"] em,
           .stApp [data-testid="stMarkdownContainer"] code,
-          .stApp label, .stApp h1, .stApp h2, .stApp h3 {{
+          .stApp label {{
             color: var(--text);
+          }}
+          /* Headings adopt the primary color so the brand reads across the page. */
+          .stApp h1, .stApp h2, .stApp h3, .demo-header h1 {{
+            color: var(--primary) !important;
           }}
           .stApp [data-testid="stCaptionContainer"],
           .stApp small {{
@@ -139,7 +149,10 @@ def apply_theme() -> None:
             border: 1px solid var(--primary) !important;
           }}
           .stButton > button:hover,
-          .stFormSubmitButton > button:hover {{ filter: brightness(0.92); }}
+          .stFormSubmitButton > button:hover {{
+            background-color: var(--primary-dark) !important;
+            border-color: var(--primary-dark) !important;
+          }}
           .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {{
             background-color: var(--bg-secondary) !important;
             color: var(--text) !important;
