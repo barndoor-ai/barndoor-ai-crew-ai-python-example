@@ -58,6 +58,9 @@ AGENT_CLIENT_SECRET = "…"
 BARNDOOR_URL = "https://<your-org>.platform.barndoor.ai"
 BARNDOOR_ENV = "production"
 
+# Prevent hosted stdout/stderr from using ASCII and crashing on Unicode logs.
+PYTHONIOENCODING = "utf-8:replace"
+
 # This is what makes the app use server-side OAuth (not loopback):
 STREAMLIT_PUBLIC_URL = "https://barndoor-knowledge-worker.streamlit.app/"
 

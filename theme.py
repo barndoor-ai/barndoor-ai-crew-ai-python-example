@@ -109,9 +109,25 @@ def apply_theme() -> None:
           .stApp [data-testid="stMarkdownContainer"] li,
           .stApp [data-testid="stMarkdownContainer"] strong,
           .stApp [data-testid="stMarkdownContainer"] em,
-          .stApp [data-testid="stMarkdownContainer"] code,
           .stApp label {{
             color: var(--text);
+          }}
+          /* Inline `code` — used in run log for tool names; Streamlit's default
+             is a near-black background that's invisible on light themes. */
+          .stApp [data-testid="stMarkdownContainer"] code {{
+            background-color: var(--bg-secondary) !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+            padding: 1px 6px !important;
+            border-radius: 4px !important;
+            font-size: 0.9em !important;
+          }}
+          /* Code blocks keep their default monospace block styling, but ensure
+             nested <code> doesn't inherit the chip background. */
+          .stApp [data-testid="stMarkdownContainer"] pre code {{
+            background-color: transparent !important;
+            border: none !important;
+            padding: 0 !important;
           }}
           /* Headings adopt the primary color so the brand reads across the page. */
           .stApp h1, .stApp h2, .stApp h3, .demo-header h1 {{
