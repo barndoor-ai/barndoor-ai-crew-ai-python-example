@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import re
 import sys
@@ -560,7 +562,14 @@ if submitted:
     def log(m):
         ts = datetime.now().strftime("%H:%M:%S")
         log_lines.append(f"<small>{ts}</small> {m}")
-        progress.markdown("<br>".join(log_lines), unsafe_allow_html=True)
+        # CrewAI dispatches event handlers from background threads. Streamlit refuses
+        # to render to the placeholder from a non-main thread; on Streamlit Cloud this
+        # raises an exception that propagates back to CrewAI as "LLM call failed".
+        # Silently swallow — the lines stay in log_lines and render after the run.
+        try:
+            progress.markdown("<br>".join(log_lines), unsafe_allow_html=True)
+        except Exception:
+            pass
 
     if uploaded:
         log(f"📎 Attached: {', '.join(file_names)}")
@@ -622,9 +631,17 @@ if submitted:
             log("🏁 Final answer ready")
 
         with st.spinner("Running…"):
-            result, app_name = asyncio.run(
-                run_crewai_task(selected_slug, full_query, log, auth_mode, model)
-            )
+            # Streamlit Cloud captures stdout/stderr as ASCII; CrewAI/litellm/rich
+            # print Unicode (emojis, ellipses) during the run and crash on encode.
+            # Redirect both to UTF-8 StringIO buffers — anything they print is
+            # discarded silently. The UI log keeps working (it doesn't touch stdout).
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                result, app_name = asyncio.run(
+                    run_crewai_task(selected_slug, full_query, log, auth_mode, model)
+                )
 
     progress.empty()  # clear live progress; full log is preserved in the history expander
 
